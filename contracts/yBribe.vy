@@ -88,17 +88,25 @@ def __init__():
 @external
 def add_bribe(
     gauge: address,
-    owner: address,
     reward_token: address,
     reward_amount: uint256,
     num_periods_duration: uint256,
     blocked_list: DynArray[address, 100],
     start_period: uint256 = 0
 ) -> uint256:
+    """
+    @notice Create a new bribe.
+    @param gauge Address of the target gauge.
+    @param reward_token Address of the ERC20 used or rewards.
+    @param reward_amount Sum total of reward amount to add.
+    @param duration length of bribe in terms of periods.
+    @param blacklist Array of addresses to blacklist.
+    @return newBribeID of the bribe created.
+    """
     assert GaugeController(gauge_controller).gauge_types(gauge) >= 0 # Block if gauge not added to controller
     assert reward_token.is_contract
     assert reward_amount > 0
-    assert num_periods_duration > 0
+    assert duration > 0
     assert start_period == 0 or start_period > self.current_period()
     
     _start_period: uint256 = start_period
@@ -115,24 +123,24 @@ def add_bribe(
         ERC20(reward_token).transfer(self.fee_recipient, fee, default_return_value=True)
         _reward_amount -= fee
     
-    reward_amount_per_period: uint256 = _reward_amount * num_periods_duration
+    reward_amount_per_period: uint256 = _reward_amount * duration
 
     self.bribes[bribe_id] = Bribe({
         gauge: gauge,
-        owner: owner,
+        owner: msg.sender,
         reward_token: reward_token,
         reward_amount: _reward_amount,
-        duration: num_periods_duration,
-        end: self.current_period() + WEEK * (num_periods_duration + 1),
+        duration: duration,
+        end: self.current_period() + WEEK * (duration + 1),
         blocked_list: blocked_list
     })
 
     log BribeAdded(
         bribe_id,
         gauge,
-        owner,
+        msg.sender,
         reward_token,
-        num_periods_duration,
+        duration,
         reward_amount_per_period,
         _reward_amount,
         fee
@@ -225,14 +233,16 @@ def _update_period(bribe_id: uint256) -> uint256:
 
     return _active_period.ts
 
-# /// @notice Get adjusted slope from Gauge Controller for a given gauge address.
-#     /// Remove the weight of blacklisted addresses.
-#     /// @param gauge Address of the gauge.
-#     /// @param _addressesBlacklisted Array of blacklisted addresses.
-#     /// @param period   Timestamp to check vote weight.
+
 @internal
 @view
 def _get_adjusted_bias(gauge: address, blocked_list: DynArray[address, 100], period: uint256) -> uint256:
+    """
+    @notice Get adjusted slope from Gauge Controller for a given gauge address. Remove the weight of blacklisted addresses.
+    @param gauge Address of the gauge.
+    @param blocked_list Array of blacklisted addresses.
+    @param period Timestamp to check vote weight.
+    """
     gauge_bias: uint256 = GaugeController(gauge_controller).points_weight(gauge, period).bias
 
     for blocked_address in blocked_list:
@@ -243,17 +253,18 @@ def _get_adjusted_bias(gauge: address, blocked_list: DynArray[address, 100], per
             gauge_bias -= self.get_bias(voted_slope.slope, voted_slope.end, period)
     return gauge_bias
 
-# /// @notice Update the amount of reward per token for a given bribe.
-#     /// @dev This function is only called once per Bribe.
+
 @internal
 def _update_reward_per_token(bribe_id: uint256, current_period: uint256):
+    """
+    @notice Update the amount of reward per token for a given bribe.
+    @dev This function is only called once per Bribe.
+    """
     if self.reward_per_token[bribe_id] == 0:
         gauge_bias: uint256 = self._get_adjusted_bias(self.bribes[bribe_id].gauge, self.bribes[bribe_id].blocked_list, current_period)
         if gauge_bias != 0:
             self.reward_per_token[bribe_id] = self.active_period[bribe_id].reward_per_period * PRECISION / gauge_bias
 
-# /// @notice Return the expected current period id.
-# /// @param bribe_id ID of the bribe.
 @internal
 @view
 def active_period_per_bribe(bribe_id: uint256) -> uint8:
@@ -273,6 +284,10 @@ def active_period_per_bribe(bribe_id: uint256) -> uint8:
 @external
 @view
 def get_active_period_per_bribe(bribe_id: uint256) -> uint8:
+    """
+    @notice Lookup current period index for given bribe
+    @param bribe_id Bribe to lookup
+    """
     return self.active_period_per_bribe(bribe_id)
 
 @internal
@@ -287,12 +302,20 @@ def periods_left(bribe_id: uint256) -> uint256:
 @external
 @view
 def get_periods_left(bribe_id: uint256) -> uint256:
+    """
+    @notice Check number of remaining periods
+    @param bribe_id Bribe to get remaining periods for
+    """
     return self.periods_left(bribe_id)
-# /// @notice Roll over to next period.
-#     /// @param bribe_id Bribe ID.
-#     /// @param currentPeriod Next period timestamp.
+
+
 @internal
 def roll_over(bribe_id: uint256, current_period: uint256):
+    """
+    @notice Make all updates and bribe modificiations transitioning into new period
+    @param bribe_id Bribe to roll-over
+    @param current_period Period to roll-over to
+    """
     index: uint8 = self.active_period_per_bribe(bribe_id)
 
     modified_bribe: ModifiedBribe = self.modified_bribe_queue[bribe_id]
@@ -334,29 +357,40 @@ def current_period() -> uint256:
 @external
 @view
 def get_current_period() -> uint256:
+    """
+    @notice Get timestamp of current period
+    """
     return self.current_period()
 
 @internal
 @view
 def get_bias(slope: uint256, end: uint256, current_period: uint256) -> uint256:
+    """
+    @notice Compute the bias associated with a specific user's gauge vote
+    """
     if current_period + WEEK >= end:
         return 0
     return slope * (end - current_period)
 
-# /// @notice Return the bribe in queue for a given ID.
-#     /// @dev Can return an empty bribe if there is no upgrade.
-#     /// @param bribeId ID of the bribe.
 @external
 def get_queued_modified_bribe(bribe_id: uint256) -> ModifiedBribe:
+    """
+    @notice The modify queue represents pending modifications to an existing bribe to be enacted in the following period
+    @dev An empty object is returned if no modified bribe is pending
+    @param bribe_id of the bribe to check for modifications
+    """
     return self.modified_bribe_queue[bribe_id]
 
-# /// @notice Return the bribe object for a given ID.
-#     /// @param bribeId ID of the bribe.
 @external
 def get_bribe(bribe_id: uint256) -> Bribe:
+    """
+    @notice Return the bribe object for a given ID
+    @param bribe_id of the bribe
+    """
     return self.bribes[bribe_id]
 
 """
+    Cleanup comments
     def close_bribe
     def update_owner
     def update_operator
