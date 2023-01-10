@@ -70,6 +70,19 @@ event OwnerUpdated:
     bribe_id: uint256
     new_owner: indexed(address)
 
+event DespositFeeUpdated:
+    desposit_fee: uint256
+
+event UpdateClaimRecipient:
+    owner: indexed(address)
+    recipient: indexed(address)
+
+event SetFeeRecipient:
+    recipient: indexed(address)
+
+event AcceptFeeRecipient:
+    recipient: indexed(address)
+
 PRECISION: constant(uint256) = 10**18
 WEEK: constant(uint256) = 60 * 60 * 24 * 7
 next_id: public(uint256)
@@ -424,11 +437,33 @@ def update_owner(bribe_id: uint256, new_owner: address):
     self.bribes[bribe_id].owner = new_owner
     log OwnerUpdated(bribe_id, new_owner)
 
+@external
+def update_fee(deposit_fee: uint256):
+    assert msg.sender == self.fee_recipient #dev: not allowed
+    assert deposit_fee < 5 * 10**16 # 5%
+    self.deposit_fee = deposit_fee
+    log DespositFeeUpdated(deposit_fee)
+
+@external
+def update_claim_recipient(recipient: address):
+    self.claim_recipient[msg.sender] = recipient
+    log UpdateClaimRecipient(msg.sender, recipient)
+
+@external
+def set_fee_recipient(new_fee_recipient: address):
+    assert msg.sender == self.fee_recipient #dev: not allowed
+    self.new_fee_recipient = new_fee_recipient
+    log SetFeeRecipient(new_fee_recipient)
+
+@external
+def accept_fee_recipient():
+    assert msg.sender == self.new_fee_recipient #dev: not allowed
+    self.fee_recipient = self.new_fee_recipient
+    self.new_fee_recipient = empty(address)
+    log AcceptFeeRecipient(self.fee_recipient)
+
 """
     Cleanup comments
     def update_operator
-    def update_fee
-    def update_claim_recipient
-    def update_fee_recipient
     def modify_bribe # duration, blacklist, etc
 """
