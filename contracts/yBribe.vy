@@ -80,8 +80,8 @@ event UpdateClaimRecipient:
 event SetFeeRecipient:
     recipient: indexed(address)
 
-event AcceptFeeRecipient:
-    recipient: indexed(address)
+event AcceptOperator:
+    operator: indexed(address)
 
 event BribeDurationUpdated:
     bribe_id: uint256
@@ -95,9 +95,11 @@ deposit_fee: public(uint256)
 gauge_controller: constant(address) = 0x2F50D538606Fa9EDD2B11E2446BEb18C9D5846bB
 
 fee_recipient: public(address)
+operator: public(address)
+new_operator: public(address)
 is_blocked: public(HashMap[uint256, HashMap[address, bool]])
 claim_delegate: public(HashMap[address, address])
-next_claim_time: public(HashMap[uint256, HashMap[address, uint256]]) # Tracks a user's next claim time after removed from blacklist
+next_claim_time: public(HashMap[uint256, HashMap[address, uint256]]) # Tracks a user's next claim time after removed from blocklist
 last_user_claim: public(HashMap[address, HashMap[uint256, uint256]])
 active_period: public(HashMap[uint256, Period])
 bribes: public(HashMap[uint256, Bribe])
@@ -109,9 +111,10 @@ claim_recipient: public(HashMap[address, address])
 @external
 def __init__():
     self.deposit_fee = 10**16 # 1%
-    self.fee_recipient = 0xFEB4acf3df3cDEA7399794D0869ef76A6EfAff52
+    self.operator = 0xFEB4acf3df3cDEA7399794D0869ef76A6EfAff52
 
 @external
+@nonreentrant("lock")
 def add_bribe(
     gauge: address,
     reward_token: address,
@@ -125,9 +128,9 @@ def add_bribe(
     @param gauge Address of the target gauge.
     @param reward_token Address of the ERC20 used or rewards.
     @param reward_amount Sum total of reward amount to add.
-    @param duration length of bribe in terms of periods.
-    @param blacklist Array of addresses to blacklist.
-    @return newBribeID of the bribe created.
+    @param num_periods_duration length of bribe in terms of periods.
+    @param blocked_list Array of addresses to blacklist.
+    @return New bribe_id of the bribe created.
     """
     assert GaugeController(gauge_controller).gauge_types(gauge) >= 0 # Block if gauge not added to controller
     assert reward_token.is_contract
@@ -156,8 +159,8 @@ def add_bribe(
         owner: msg.sender,
         reward_token: reward_token,
         reward_amount: _reward_amount,
-        duration: duration,
-        end: self.current_period() + WEEK * (duration + 1),
+        duration: num_periods_duration,
+        end: self.current_period() + WEEK * (num_periods_duration + 1),
         blocked_list: blocked_list
     })
 
@@ -166,7 +169,7 @@ def add_bribe(
         gauge,
         msg.sender,
         reward_token,
-        duration,
+        num_periods_duration,
         reward_amount_per_period,
         _reward_amount,
         fee
@@ -184,12 +187,23 @@ def add_bribe(
     return bribe_id
 
 @external
+@nonreentrant("lock")
 def claim_reward(bribe_id: uint256) -> uint256:
     return self._claim(msg.sender, bribe_id)
 
 @external
+@nonreentrant("lock")
 def claim_reward_for(user: address, bribe_id: uint256) -> uint256: 
     return self._claim(user, bribe_id)
+
+@external
+@nonreentrant("lock")
+def claim_reward_for_many(users: DynArray[address, 100], bribe_ids: DynArray[uint256, 100]):
+    length: uint256 = len(users)
+    assert length == len(bribe_ids)
+    assert length <= 100
+    for i in range(0, 100):
+        self._claim(users[i], bribe_ids[i])
 
 @internal
 def _claim(user: address, bribe_id: uint256) -> uint256:
@@ -240,6 +254,19 @@ def _claim(user: address, bribe_id: uint256) -> uint256:
 
     return amount
 
+@external
+@nonreentrant("lock")
+def update_period(bribe_id: uint256) -> uint256:
+    return self._update_period(bribe_id)
+
+@external
+@nonreentrant("lock")
+def update_period_many(bribe_ids: DynArray[uint256, 100]) -> DynArray[uint256, 100]:
+    periods: DynArray[uint256, 100] = []
+    for bribe_id in bribe_ids:
+        periods.append(self._update_period(bribe_id))
+    return periods
+
 @internal
 def _update_period(bribe_id: uint256) -> uint256:
     _active_period: Period = self.active_period[bribe_id]
@@ -264,9 +291,9 @@ def _update_period(bribe_id: uint256) -> uint256:
 @view
 def _get_adjusted_bias(gauge: address, blocked_list: DynArray[address, 100], period: uint256) -> uint256:
     """
-    @notice Get adjusted slope from Gauge Controller for a given gauge address. Remove the weight of blacklisted addresses.
+    @notice Get adjusted slope from Gauge Controller for a given gauge address. Remove the weight of blocked addresses.
     @param gauge Address of the gauge.
-    @param blocked_list Array of blacklisted addresses.
+    @param blocked_list Array of blocked addresses.
     @param period Timestamp to check vote weight.
     """
     gauge_bias: uint256 = GaugeController(gauge_controller).points_weight(gauge, period).bias
@@ -293,7 +320,7 @@ def _update_reward_per_token(bribe_id: uint256, current_period: uint256):
 
 @internal
 @view
-def active_period_per_bribe(bribe_id: uint256) -> uint8:
+def _active_period_per_bribe(bribe_id: uint256) -> uint8:
     bribe: Bribe = self.bribes[bribe_id]
 
     end: uint256 = bribe.end
@@ -309,12 +336,12 @@ def active_period_per_bribe(bribe_id: uint256) -> uint8:
 
 @external
 @view
-def get_active_period_per_bribe(bribe_id: uint256) -> uint8:
+def active_period_per_bribe(bribe_id: uint256) -> uint8:
     """
     @notice Lookup current period index for given bribe
     @param bribe_id Bribe to lookup
     """
-    return self.active_period_per_bribe(bribe_id)
+    return self._active_period_per_bribe(bribe_id)
 
 @internal
 @view
@@ -342,7 +369,7 @@ def roll_over(bribe_id: uint256, current_period: uint256):
     @param bribe_id Bribe to roll-over
     @param current_period Period to roll-over to
     """
-    index: uint8 = self.active_period_per_bribe(bribe_id)
+    index: uint8 = self._active_period_per_bribe(bribe_id)
 
     modified_bribe: ModifiedBribe = self.modified_bribe_queue[bribe_id]
 
@@ -363,7 +390,7 @@ def roll_over(bribe_id: uint256, current_period: uint256):
     if bribe.end > current_period + WEEK and periods_left > 1:
         reward_per_period = reward_per_period / periods_left
 
-    # Get adjusted slope without blacklisted addresses.
+    # Get adjusted slope without blocked addresses.
     gauge_bias: uint256 = self._get_adjusted_bias(bribe.gauge, bribe.blocked_list, current_period)
 
     self.reward_per_token[bribe_id] = reward_per_period * PRECISION / gauge_bias
@@ -426,15 +453,15 @@ def close_bribe(bribe_id: uint256):
         left_over: uint256 = 0
         modified_bribe: ModifiedBribe = self.modified_bribe_queue[bribe_id]
         if modified_bribe.reward_amount != 0:
-            leftOver = modified_bribe.reward_amount - self.amount_claimed[bribe_id]
-            clear(self.modified_bribe_queue[bribeId])
+            left_over = modified_bribe.reward_amount - self.amount_claimed[bribe_id]
+            self.modified_bribe_queue[bribe_id] = empty(ModifiedBribe)
         else:
-            leftOver = self.bribes[bribeId].reward_amount - amountClaimed[bribeId]
+            left_over = self.bribes[bribe_id].reward_amount - self.amount_claimed[bribe_id]
         
-        ERC20(bribe.reward_token).transferFrom(bribe.owner, leftOver, default_return_value=True)
-        clear(self.bribes[bribeId].owner)
+        ERC20(bribe.reward_token).transferFrom(bribe.owner, self, left_over, default_return_value=True)
+        self.bribes[bribe_id].owner = empty(address)
 
-        log BribeClosed(bribeId, leftOver)
+        log BribeClosed(bribe_id, left_over)
 
 @external
 def update_owner(bribe_id: uint256, new_owner: address):
@@ -457,46 +484,53 @@ def update_claim_recipient(recipient: address):
 @external
 def set_fee_recipient(new_fee_recipient: address):
     assert msg.sender == self.fee_recipient #dev: not allowed
-    self.new_fee_recipient = new_fee_recipient
+    assert new_fee_recipient != empty(address)
+    self.fee_recipient = new_fee_recipient
     log SetFeeRecipient(new_fee_recipient)
 
 @external
-def accept_fee_recipient():
-    assert msg.sender == self.new_fee_recipient #dev: not allowed
-    self.fee_recipient = self.new_fee_recipient
-    self.new_fee_recipient = empty(address)
-    log AcceptFeeRecipient(self.fee_recipient)
+def set_operator(new_operator: address):
+    assert msg.sender == self.operator #dev: not allowed
+    assert new_operator != empty(address)
+    self.new_operator = new_operator
+
+@external
+def accept_operator():
+    assert msg.sender == self.new_operator #dev: not allowed
+    self.operator = self.new_operator
+    self.new_operator = empty(address)
+    log AcceptOperator(self.new_operator)
 
 @external
 @nonreentrant("lock")
-def increase_bribe_duration(bribe_id: uint256, added_periods: uint8, added_amount: uint256):
+def increase_bribe_duration(bribe_id: uint256, added_periods: uint256, added_amount: uint256):
     assert msg.sender == self.bribes[bribe_id].owner #dev: not allowed
     assert self.periods_left(bribe_id) != 0 #dev: bribe ended
     assert added_amount != 0 #dev: amount must increase
     bribe: Bribe = self.bribes[bribe_id]
     modified_bribe: ModifiedBribe = self.modified_bribe_queue[bribe_id]
     
-    ERC20(reward_token).transferFrom(msg.sender, self, added_amount, default_return_value=True)
+    ERC20(bribe.reward_token).transferFrom(msg.sender, self, added_amount, default_return_value=True)
     if modified_bribe.reward_amount != 0:
         modified_bribe = ModifiedBribe({
-                duration: modified_bribe.duration + added_periods,
-                reward_amount: modified_bribe.reward_amount + added_amount,
-                end: modified_bribe.end + (added_periods * _WEEK),
-                blocked_list: modified_bribe.blocked_list
+            duration: modified_bribe.duration + added_periods,
+            reward_amount: modified_bribe.reward_amount + added_amount,
+            end: modified_bribe.end + (added_periods * WEEK),
+            blocked_list: modified_bribe.blocked_list
         })
     else:
          modified_bribe = ModifiedBribe({
                 duration: bribe.duration + added_periods,
                 reward_amount: bribe.reward_amount + added_amount,
-                end: bribe.end + (added_periods * _WEEK),
+                end: bribe.end + (added_periods * WEEK),
                 blocked_list: bribe.blocked_list
         })
     self.modified_bribe_queue[bribe_id] = modified_bribe
 
     log BribeDurationUpdated(bribe_id, modified_bribe.duration, modified_bribe.reward_amount)
 
-"""
-    Cleanup comments
-    def update_operator
-    def modify_bribe # duration, blacklist, etc
-"""
+# """
+#     Cleanup comments
+#     def update_operator
+#     def modify_bribe # duration, blacklist, etc
+# """
