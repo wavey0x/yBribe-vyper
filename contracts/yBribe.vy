@@ -37,7 +37,6 @@ struct ModifiedBribe:
     duration: uint256
     reward_amount: uint256
     end: uint256
-    blocked_list: DynArray[address, 100]
 
 event Claimed:
     user: indexed(address)
@@ -104,6 +103,7 @@ last_user_claim: public(HashMap[address, HashMap[uint256, uint256]])
 active_period: public(HashMap[uint256, Period])
 bribes: public(HashMap[uint256, Bribe])
 modified_bribe_queue: public(HashMap[uint256, ModifiedBribe])
+modified_blocked_list: public(HashMap[uint256, DynArray[address, 100]])
 amount_claimed: public(HashMap[uint256, uint256])
 reward_per_token: public(HashMap[uint256, uint256])
 claim_recipient: public(HashMap[address, address])
@@ -203,7 +203,7 @@ def claim_reward_for_many(users: DynArray[address, 100], bribe_ids: DynArray[uin
 @internal
 def _claim(user: address, bribe_id: uint256) -> uint256:
     permitted: bool = msg.sender == user or (
-        self.claim_delegate[user] == ZERO_ADDRESS or self.claim_delegate[user] == msg.sender
+        self.claim_delegate[user] == empty(address) or self.claim_delegate[user] == msg.sender
     )
     if not permitted or self.is_blocked[bribe_id][user] or self.next_claim_time[bribe_id][user] > self.current_period():
         return 0
@@ -240,7 +240,7 @@ def _claim(user: address, bribe_id: uint256) -> uint256:
     self.amount_claimed[bribe_id] += amount
 
     recipient: address = self.claim_recipient[user]
-    if recipient == ZERO_ADDRESS:
+    if recipient == empty(address):
         recipient = user
     ERC20(bribe.reward_token).transfer(recipient, amount, default_return_value=True)
 
@@ -373,9 +373,14 @@ def roll_over(bribe_id: uint256, current_period: uint256):
         self.bribes[bribe_id].duration = modified_bribe.duration
         self.bribes[bribe_id].reward_amount = modified_bribe.reward_amount
         self.bribes[bribe_id].end = modified_bribe.end
-        self.bribes[bribe_id].blocked_list = modified_bribe.blocked_list
-        # Clear storage
-        self.modified_bribe_queue[bribe_id] = empty(ModifiedBribe)
+
+    if len(self.modified_blocked_list[bribe_id]) != 0:
+        for blocked_address in self.bribes[bribe_id].blocked_list:
+            self.is_blocked[bribe_id][blocked_address] = False
+
+        self.bribes[bribe_id].blocked_list = self.modified_blocked_list[bribe_id]
+        self.modified_blocked_list[bribe_id] = empty(DynArray[address, 100])
+    
 
     bribe: Bribe = self.bribes[bribe_id]
 
@@ -511,18 +516,22 @@ def increase_bribe_duration(bribe_id: uint256, added_periods: uint256, added_amo
             duration: modified_bribe.duration + added_periods,
             reward_amount: modified_bribe.reward_amount + added_amount,
             end: modified_bribe.end + (added_periods * WEEK),
-            blocked_list: modified_bribe.blocked_list
         })
     else:
          modified_bribe = ModifiedBribe({
                 duration: bribe.duration + added_periods,
                 reward_amount: bribe.reward_amount + added_amount,
                 end: bribe.end + (added_periods * WEEK),
-                blocked_list: bribe.blocked_list
         })
     self.modified_bribe_queue[bribe_id] = modified_bribe
 
     log BribeDurationUpdated(bribe_id, modified_bribe.duration, modified_bribe.reward_amount)
+
+@external
+def update_blocked_list(bribe_id: uint256, blocked_list: DynArray[address, 100]):
+    assert msg.sender == self.bribes[bribe_id].owner #dev: not allowed
+    modified_bribe: ModifiedBribe = self.modified_bribe_queue[bribe_id]
+    self.modified_blocked_list[bribe_id] = blocked_list
 
 # """
 #     TODO
