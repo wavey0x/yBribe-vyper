@@ -62,6 +62,10 @@ event PeriodRolledOver:
     period: uint256
     reward_amount_per_period: uint256
 
+event BribeClosed:
+    bribe_id: uint256
+    remainingReward: uint256
+
 PRECISION: constant(uint256) = 10**18
 WEEK: constant(uint256) = 60 * 60 * 24 * 7
 next_id: public(uint256)
@@ -388,6 +392,27 @@ def get_bribe(bribe_id: uint256) -> Bribe:
     @param bribe_id of the bribe
     """
     return self.bribes[bribe_id]
+
+
+@nonreentrant("lock")
+@external
+def close_bribe(bribe_id: uint256):
+    assert msg.sender == self.bribes[bribe_id].owner #dev: not allowed
+    bribe: Bribe = self.bribes[bribe_id]
+
+    if self.current_period() >= bribe.end:
+        left_over: uint256 = 0
+        modified_bribe: ModifiedBribe = self.modified_bribe_queue[bribe_id]
+        if modified_bribe.reward_amount != 0:
+            leftOver = modified_bribe.reward_amount - self.amount_claimed[bribe_id]
+            clear(self.modified_bribe_queue[bribeId])
+        else:
+            leftOver = self.bribes[bribeId].reward_amount - amountClaimed[bribeId]
+        
+        ERC20(bribe.reward_token).transferFrom(bribe.owner, leftOver, default_return_value=True)
+        clear(bribes[bribeId].owner)
+
+        log BribeClosed(bribeId, leftOver)
 
 """
     Cleanup comments
