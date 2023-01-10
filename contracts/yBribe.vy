@@ -342,3 +342,26 @@ def get_bias(slope: uint256, end: uint256, current_period: uint256) -> uint256:
     if current_period + WEEK >= end:
         return 0
     return slope * (end - current_period)
+
+# /// @notice Return the bribe in queue for a given ID.
+#     /// @dev Can return an empty bribe if there is no upgrade.
+#     /// @param bribeId ID of the bribe.
+@external
+def get_queued_modified_bribe(bribe_id: uint256) -> ModifiedBribe:
+    return self.modified_bribe_queue[bribe_id]
+
+# /// @notice Return the bribe object for a given ID.
+#     /// @param bribeId ID of the bribe.
+@external
+def get_bribe(bribe_id: uint256) -> Bribe:
+    return self.bribes[bribe_id]
+
+"""
+    def close_bribe
+    def update_owner
+    def update_operator
+    def update_fee
+    def update_claim_recipient
+    def update_fee_recipient
+    def modify_bribe # duration, blacklist, etc
+"""
