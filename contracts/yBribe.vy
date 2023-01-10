@@ -380,7 +380,9 @@ def roll_over(bribe_id: uint256, current_period: uint256):
 
         self.bribes[bribe_id].blocked_list = self.modified_blocked_list[bribe_id]
         self.modified_blocked_list[bribe_id] = empty(DynArray[address, 100])
-    
+        
+        for blocked_address in self.bribes[bribe_id].blocked_list:
+            self.is_blocked[bribe_id][blocked_address] = True
 
     bribe: Bribe = self.bribes[bribe_id]
 
