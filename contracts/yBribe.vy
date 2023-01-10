@@ -106,7 +106,7 @@ def add_bribe(
     assert GaugeController(gauge_controller).gauge_types(gauge) >= 0 # Block if gauge not added to controller
     assert reward_token.is_contract
     assert reward_amount > 0
-    assert duration > 0
+    assert num_periods_duration > 0
     assert start_period == 0 or start_period > self.current_period()
     
     _start_period: uint256 = start_period
@@ -123,7 +123,7 @@ def add_bribe(
         ERC20(reward_token).transfer(self.fee_recipient, fee, default_return_value=True)
         _reward_amount -= fee
     
-    reward_amount_per_period: uint256 = _reward_amount * duration
+    reward_amount_per_period: uint256 = _reward_amount / num_periods_duration
 
     self.bribes[bribe_id] = Bribe({
         gauge: gauge,
