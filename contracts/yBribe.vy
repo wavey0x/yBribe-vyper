@@ -83,6 +83,11 @@ event SetFeeRecipient:
 event AcceptFeeRecipient:
     recipient: indexed(address)
 
+event BribeDurationUpdated:
+    bribe_id: uint256
+    duration: uint256
+    reward_amount: uint256
+
 PRECISION: constant(uint256) = 10**18
 WEEK: constant(uint256) = 60 * 60 * 24 * 7
 next_id: public(uint256)
@@ -427,7 +432,7 @@ def close_bribe(bribe_id: uint256):
             leftOver = self.bribes[bribeId].reward_amount - amountClaimed[bribeId]
         
         ERC20(bribe.reward_token).transferFrom(bribe.owner, leftOver, default_return_value=True)
-        clear(bribes[bribeId].owner)
+        clear(self.bribes[bribeId].owner)
 
         log BribeClosed(bribeId, leftOver)
 
@@ -461,6 +466,34 @@ def accept_fee_recipient():
     self.fee_recipient = self.new_fee_recipient
     self.new_fee_recipient = empty(address)
     log AcceptFeeRecipient(self.fee_recipient)
+
+@external
+@nonreentrant("lock")
+def increase_bribe_duration(bribe_id: uint256, added_periods: uint8, added_amount: uint256):
+    assert msg.sender == self.bribes[bribe_id].owner #dev: not allowed
+    assert self.periods_left(bribe_id) != 0 #dev: bribe ended
+    assert added_amount != 0 #dev: amount must increase
+    bribe: Bribe = self.bribes[bribe_id]
+    modified_bribe: ModifiedBribe = self.modified_bribe_queue[bribe_id]
+    
+    ERC20(reward_token).transferFrom(msg.sender, self, added_amount, default_return_value=True)
+    if modified_bribe.reward_amount != 0:
+        modified_bribe = ModifiedBribe({
+                duration: modified_bribe.duration + added_periods,
+                reward_amount: modified_bribe.reward_amount + added_amount,
+                end: modified_bribe.end + (added_periods * _WEEK),
+                blocked_list: modified_bribe.blocked_list
+        })
+    else:
+         modified_bribe = ModifiedBribe({
+                duration: bribe.duration + added_periods,
+                reward_amount: bribe.reward_amount + added_amount,
+                end: bribe.end + (added_periods * _WEEK),
+                blocked_list: bribe.blocked_list
+        })
+    self.modified_bribe_queue[bribe_id] = modified_bribe
+
+    log BribeDurationUpdated(bribe_id, modified_bribe.duration, modified_bribe.reward_amount)
 
 """
     Cleanup comments
