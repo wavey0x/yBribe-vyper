@@ -62,6 +62,32 @@ event PeriodRolledOver:
     period: uint256
     reward_amount_per_period: uint256
 
+event BribeClosed:
+    bribe_id: uint256
+    remainingReward: uint256
+
+event OwnerUpdated:
+    bribe_id: uint256
+    new_owner: indexed(address)
+
+event DespositFeeUpdated:
+    desposit_fee: uint256
+
+event UpdateClaimRecipient:
+    owner: indexed(address)
+    recipient: indexed(address)
+
+event SetFeeRecipient:
+    recipient: indexed(address)
+
+event AcceptFeeRecipient:
+    recipient: indexed(address)
+
+event BribeDurationUpdated:
+    bribe_id: uint256
+    duration: uint256
+    reward_amount: uint256
+
 PRECISION: constant(uint256) = 10**18
 WEEK: constant(uint256) = 60 * 60 * 24 * 7
 next_id: public(uint256)
@@ -105,8 +131,8 @@ def add_bribe(
     """
     assert GaugeController(gauge_controller).gauge_types(gauge) >= 0 # Block if gauge not added to controller
     assert reward_token.is_contract
-    assert reward_amount > 0
-    assert duration > 0
+    assert reward_amount != 0
+    assert num_periods_duration != 0
     assert start_period == 0 or start_period > self.current_period()
     
     _start_period: uint256 = start_period
@@ -119,11 +145,11 @@ def add_bribe(
     # Compute fee
     fee: uint256 = reward_amount * self.deposit_fee / PRECISION
     _reward_amount: uint256 = reward_amount
-    if fee > 0:
+    if fee != 0:
         ERC20(reward_token).transfer(self.fee_recipient, fee, default_return_value=True)
         _reward_amount -= fee
     
-    reward_amount_per_period: uint256 = _reward_amount * duration
+    reward_amount_per_period: uint256 = _reward_amount / num_periods_duration
 
     self.bribes[bribe_id] = Bribe({
         gauge: gauge,
@@ -389,13 +415,88 @@ def get_bribe(bribe_id: uint256) -> Bribe:
     """
     return self.bribes[bribe_id]
 
+
+@nonreentrant("lock")
+@external
+def close_bribe(bribe_id: uint256):
+    assert msg.sender == self.bribes[bribe_id].owner #dev: not allowed
+    bribe: Bribe = self.bribes[bribe_id]
+
+    if self.current_period() >= bribe.end:
+        left_over: uint256 = 0
+        modified_bribe: ModifiedBribe = self.modified_bribe_queue[bribe_id]
+        if modified_bribe.reward_amount != 0:
+            leftOver = modified_bribe.reward_amount - self.amount_claimed[bribe_id]
+            clear(self.modified_bribe_queue[bribeId])
+        else:
+            leftOver = self.bribes[bribeId].reward_amount - amountClaimed[bribeId]
+        
+        ERC20(bribe.reward_token).transferFrom(bribe.owner, leftOver, default_return_value=True)
+        clear(self.bribes[bribeId].owner)
+
+        log BribeClosed(bribeId, leftOver)
+
+@external
+def update_owner(bribe_id: uint256, new_owner: address):
+    assert msg.sender == self.bribes[bribe_id].owner #dev: not allowed
+    self.bribes[bribe_id].owner = new_owner
+    log OwnerUpdated(bribe_id, new_owner)
+
+@external
+def update_fee(deposit_fee: uint256):
+    assert msg.sender == self.fee_recipient #dev: not allowed
+    assert deposit_fee < 5 * 10**16 # 5%
+    self.deposit_fee = deposit_fee
+    log DespositFeeUpdated(deposit_fee)
+
+@external
+def update_claim_recipient(recipient: address):
+    self.claim_recipient[msg.sender] = recipient
+    log UpdateClaimRecipient(msg.sender, recipient)
+
+@external
+def set_fee_recipient(new_fee_recipient: address):
+    assert msg.sender == self.fee_recipient #dev: not allowed
+    self.new_fee_recipient = new_fee_recipient
+    log SetFeeRecipient(new_fee_recipient)
+
+@external
+def accept_fee_recipient():
+    assert msg.sender == self.new_fee_recipient #dev: not allowed
+    self.fee_recipient = self.new_fee_recipient
+    self.new_fee_recipient = empty(address)
+    log AcceptFeeRecipient(self.fee_recipient)
+
+@external
+@nonreentrant("lock")
+def increase_bribe_duration(bribe_id: uint256, added_periods: uint8, added_amount: uint256):
+    assert msg.sender == self.bribes[bribe_id].owner #dev: not allowed
+    assert self.periods_left(bribe_id) != 0 #dev: bribe ended
+    assert added_amount != 0 #dev: amount must increase
+    bribe: Bribe = self.bribes[bribe_id]
+    modified_bribe: ModifiedBribe = self.modified_bribe_queue[bribe_id]
+    
+    ERC20(reward_token).transferFrom(msg.sender, self, added_amount, default_return_value=True)
+    if modified_bribe.reward_amount != 0:
+        modified_bribe = ModifiedBribe({
+                duration: modified_bribe.duration + added_periods,
+                reward_amount: modified_bribe.reward_amount + added_amount,
+                end: modified_bribe.end + (added_periods * _WEEK),
+                blocked_list: modified_bribe.blocked_list
+        })
+    else:
+         modified_bribe = ModifiedBribe({
+                duration: bribe.duration + added_periods,
+                reward_amount: bribe.reward_amount + added_amount,
+                end: bribe.end + (added_periods * _WEEK),
+                blocked_list: bribe.blocked_list
+        })
+    self.modified_bribe_queue[bribe_id] = modified_bribe
+
+    log BribeDurationUpdated(bribe_id, modified_bribe.duration, modified_bribe.reward_amount)
+
 """
     Cleanup comments
-    def close_bribe
-    def update_owner
     def update_operator
-    def update_fee
-    def update_claim_recipient
-    def update_fee_recipient
     def modify_bribe # duration, blacklist, etc
 """
