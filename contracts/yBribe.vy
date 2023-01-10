@@ -120,8 +120,7 @@ def add_bribe(
     reward_token: address,
     reward_amount: uint256,
     num_periods_duration: uint256,
-    blocked_list: DynArray[address, 100],
-    start_period: uint256 = 0
+    blocked_list: DynArray[address, 100]
 ) -> uint256:
     """
     @notice Create a new bribe.
@@ -136,11 +135,7 @@ def add_bribe(
     assert reward_token.is_contract
     assert reward_amount != 0
     assert num_periods_duration != 0
-    assert start_period == 0 or start_period > self.current_period()
     
-    _start_period: uint256 = start_period
-    if _start_period == 0:
-        _start_period = self.current_period() + WEEK
     bribe_id: uint256 = self.next_id
     self.next_id += 1 # Increment global counter
 
@@ -530,7 +525,6 @@ def increase_bribe_duration(bribe_id: uint256, added_periods: uint256, added_amo
     log BribeDurationUpdated(bribe_id, modified_bribe.duration, modified_bribe.reward_amount)
 
 # """
-#     Cleanup comments
-#     def update_operator
+#     TODO
 #     def modify_bribe # duration, blacklist, etc
 # """
