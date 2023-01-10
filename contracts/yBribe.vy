@@ -66,6 +66,10 @@ event BribeClosed:
     bribe_id: uint256
     remainingReward: uint256
 
+event OwnerUpdated:
+    bribe_id: uint256
+    new_owner: indexed(address)
+
 PRECISION: constant(uint256) = 10**18
 WEEK: constant(uint256) = 60 * 60 * 24 * 7
 next_id: public(uint256)
@@ -414,10 +418,14 @@ def close_bribe(bribe_id: uint256):
 
         log BribeClosed(bribeId, leftOver)
 
+@external
+def update_owner(bribe_id: uint256, new_owner: address):
+    assert msg.sender == self.bribes[bribe_id].owner #dev: not allowed
+    self.bribes[bribe_id].owner = new_owner
+    log OwnerUpdated(bribe_id, new_owner)
+
 """
     Cleanup comments
-    def close_bribe
-    def update_owner
     def update_operator
     def update_fee
     def update_claim_recipient
