@@ -21,7 +21,7 @@ def vecrv():
 
 
 @pytest.fixture
-def gov(accounts):
+def operator(accounts):
     yield accounts.at("0xFEB4acf3df3cDEA7399794D0869ef76A6EfAff52", force=True)
 
 
@@ -36,6 +36,11 @@ def user(accounts, crv, vecrv):
         crv.balanceOf(user), chain.time() + (2 * 365 * 24 * 60 * 60), {"from": user}
     )
     yield user
+
+
+@pytest.fixture
+def fee_recipient(accounts):
+    yield accounts[1]
 
 
 @pytest.fixture
@@ -157,6 +162,6 @@ def voter2(accounts):
 def add_bribe(bribe):
     def add_bribe(gauge, token, amount, whale, weeks=1, blocklist=[]):
         token.approve(bribe, amount, {"from": whale})
-        bribe.add_bribe(gauge, token, amount, weeks, blocklist, {"from": whale})
+        return bribe.add_bribe(gauge, token, amount, weeks, blocklist, {"from": whale})
 
     yield add_bribe

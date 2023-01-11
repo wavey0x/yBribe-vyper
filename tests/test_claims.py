@@ -1,7 +1,7 @@
 from brownie import chain
 
 
-def test_create_claim(
+def test_claim_reward(
     bribe, user, gauge1, token1, token1_whale, add_bribe, gauge_controller, WEEK
 ):
     assert token1.balanceOf(user) == 0

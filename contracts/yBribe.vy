@@ -513,7 +513,7 @@ def close_bribe(bribe_id: uint256):
         else:
             left_over = self.bribes[bribe_id].reward_amount - self.amount_claimed[bribe_id]
         
-        ERC20(bribe.reward_token).transferFrom(bribe.owner, self, left_over, default_return_value=True)
+        ERC20(bribe.reward_token).transfer(bribe.owner, left_over, default_return_value=True)
         self.bribes[bribe_id].owner = empty(address)
 
         log BribeClosed(bribe_id, left_over)
@@ -538,7 +538,7 @@ def update_claim_recipient(recipient: address):
 
 @external
 def set_fee_recipient(new_fee_recipient: address):
-    assert msg.sender == self.fee_recipient #dev: not allowed
+    assert msg.sender == self.fee_recipient or msg.sender == self.operator #dev: not allowed
     assert new_fee_recipient != empty(address)
     self.fee_recipient = new_fee_recipient
     log SetFeeRecipient(new_fee_recipient)
