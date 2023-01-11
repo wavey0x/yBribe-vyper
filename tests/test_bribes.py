@@ -33,3 +33,21 @@ def test_update_owner(gauge1, token1, token1_whale, add_bribe, bribe, user):
     with brownie.reverts():
         bribe.update_owner(0, user, {"from": user})
     bribe.update_owner(0, user, {"from": token1_whale})
+
+
+def test_increase_bribe_duration(gauge1, token1, token1_whale, add_bribe, bribe, WEEK, user):
+    amount = 2_000e18
+    next_week = (chain.time() // WEEK + 1) * WEEK
+    add_bribe(gauge1, token1, amount, token1_whale)
+    token1.approve(bribe, amount, {"from": token1_whale})
+    with brownie.reverts():
+        bribe.increase_bribe_duration(0, 1, amount, {"from": user})
+
+    with brownie.reverts():
+        bribe.increase_bribe_duration(0, 1, 0, {"from": token1_whale})
+
+    bribe.increase_bribe_duration(0, 1, amount, {"from": token1_whale})
+    modified_bribe = bribe.modified_bribe_queue(0).dict()
+    assert modified_bribe["duration"] == 2
+    assert modified_bribe["reward_amount"] == amount * 2
+    assert modified_bribe["end"] == next_week + WEEK * 2
