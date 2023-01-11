@@ -1,0 +1,9 @@
+networks:
+  default: mainnet-fork
+
+autofetch_sources: True
+
+compiler:
+  vyper:
+    version: 0.3.7
+  

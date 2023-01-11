@@ -1,5 +1,8 @@
 # @version 0.3.7
 
+#     TODO
+#     def modify_bribe # duration, blacklist, etc
+
 from vyper.interfaces import ERC20
 from vyper.interfaces import ERC20Detailed
 
@@ -523,8 +526,3 @@ def increase_bribe_duration(bribe_id: uint256, added_periods: uint256, added_amo
     self.modified_bribe_queue[bribe_id] = modified_bribe
 
     log BribeDurationUpdated(bribe_id, modified_bribe.duration, modified_bribe.reward_amount)
-
-# """
-#     TODO
-#     def modify_bribe # duration, blacklist, etc
-# """
