@@ -1,5 +1,8 @@
 # @version 0.3.7
 
+#     TODO
+#     def modify_bribe # duration, blacklist, etc
+
 from vyper.interfaces import ERC20
 from vyper.interfaces import ERC20Detailed
 
@@ -143,7 +146,7 @@ def add_bribe(
     # Compute fee
     fee: uint256 = reward_amount * self.deposit_fee / PRECISION
     _reward_amount: uint256 = reward_amount
-    if fee != 0:
+    if fee != 0 and self.fee_recipient != empty(address):
         ERC20(reward_token).transfer(self.fee_recipient, fee, default_return_value=True)
         _reward_amount -= fee
     
@@ -211,6 +214,7 @@ def _claim(user: address, bribe_id: uint256) -> uint256:
     current_period: uint256 = self._update_period(bribe_id)
 
     bribe: Bribe = self.bribes[bribe_id]
+    assert bribe.gauge != empty(address) #dev: do not exists
 
     gauge: address = bribe.gauge
     end: uint256 = bribe.end
@@ -246,6 +250,62 @@ def _claim(user: address, bribe_id: uint256) -> uint256:
 
 
     log Claimed(user, bribe.reward_token, bribe_id, amount, current_period)
+
+    return amount
+
+@external
+@view
+def claimable(user: address, bribe_id: uint256) -> uint256: 
+
+    if self.is_blocked[bribe_id][user]:
+        return 0
+
+    current_period: uint256 = self.current_period()
+    bribe: Bribe = self.bribes[bribe_id]
+    gauge: address = bribe.gauge
+    end: uint256 = bribe.end
+    last_vote: uint256 = GaugeController(gauge_controller).last_user_vote(user, gauge)
+    vs: VotedSlope = GaugeController(gauge_controller).vote_user_slopes(user, gauge)
+
+
+    if (
+        vs.slope == 0 or
+        self.last_user_claim[user][bribe_id] >= current_period or
+        current_period >= end or
+        current_period <= last_vote or 
+        current_period >= end or
+        current_period != self.current_period() or # This maybe we can remove
+        self.amount_claimed[bribe_id] == bribe.reward_amount
+    ):
+        return 0
+
+    reward_per_token: uint256 = self.reward_per_token[bribe_id]
+
+    if reward_per_token == 0 or (reward_per_token > 0 and self.active_period[bribe_id].ts != current_period):
+        reward_per_period: uint256 = 0
+        modified_bribe_queue: ModifiedBribe = self.modified_bribe_queue[bribe_id]
+        if modified_bribe_queue.duration != 0:
+            bribe.duration = modified_bribe_queue.duration
+            bribe.reward_amount = modified_bribe_queue.reward_amount
+            end = modified_bribe_queue.end
+        periodsLeft: uint256 = 0
+
+        if end > current_period:
+            periodsLeft = (end - current_period) / WEEK
+        reward_per_period = bribe.reward_amount - self.amount_claimed[bribe_id]
+
+        if end > current_period + WEEK and periodsLeft > 1:
+            reward_per_period = reward_per_period / periodsLeft
+        
+        gauge_bias: uint256 = self._get_adjusted_bias(self.bribes[bribe_id].gauge, self.bribes[bribe_id].blocked_list, current_period)
+        reward_per_token = reward_per_period * PRECISION / gauge_bias
+
+
+    bias: uint256 = self.get_bias(vs.slope, vs.end, current_period)
+    amount: uint256 = bias * reward_per_token / PRECISION
+    amount_claimed: uint256 = self.amount_claimed[bribe_id]
+    if amount + amount_claimed > bribe.reward_amount:
+        amount = bribe.reward_amount - amount_claimed
 
     return amount
 
@@ -453,7 +513,7 @@ def close_bribe(bribe_id: uint256):
         else:
             left_over = self.bribes[bribe_id].reward_amount - self.amount_claimed[bribe_id]
         
-        ERC20(bribe.reward_token).transferFrom(bribe.owner, self, left_over, default_return_value=True)
+        ERC20(bribe.reward_token).transfer(bribe.owner, left_over, default_return_value=True)
         self.bribes[bribe_id].owner = empty(address)
 
         log BribeClosed(bribe_id, left_over)
@@ -478,7 +538,7 @@ def update_claim_recipient(recipient: address):
 
 @external
 def set_fee_recipient(new_fee_recipient: address):
-    assert msg.sender == self.fee_recipient #dev: not allowed
+    assert msg.sender == self.fee_recipient or msg.sender == self.operator #dev: not allowed
     assert new_fee_recipient != empty(address)
     self.fee_recipient = new_fee_recipient
     log SetFeeRecipient(new_fee_recipient)
@@ -523,8 +583,3 @@ def increase_bribe_duration(bribe_id: uint256, added_periods: uint256, added_amo
     self.modified_bribe_queue[bribe_id] = modified_bribe
 
     log BribeDurationUpdated(bribe_id, modified_bribe.duration, modified_bribe.reward_amount)
-
-# """
-#     TODO
-#     def modify_bribe # duration, blacklist, etc
-# """
