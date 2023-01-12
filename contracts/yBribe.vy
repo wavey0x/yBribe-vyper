@@ -1,8 +1,5 @@
 # @version 0.3.7
 
-#     TODO
-#     def modify_bribe # duration, blacklist, etc
-
 from vyper.interfaces import ERC20
 from vyper.interfaces import ERC20Detailed
 
@@ -40,6 +37,7 @@ struct ModifiedBribe:
     duration: uint256
     reward_amount: uint256
     end: uint256
+    blocked_list_modified: bool
 
 event Claimed:
     user: indexed(address)
@@ -85,10 +83,11 @@ event SetFeeRecipient:
 event AcceptOperator:
     operator: indexed(address)
 
-event BribeDurationUpdated:
+event PendingBribeModification:
     bribe_id: uint256
     duration: uint256
     reward_amount: uint256
+    blocked_list_modified: bool
 
 PRECISION: constant(uint256) = 10**18
 WEEK: constant(uint256) = 60 * 60 * 24 * 7
@@ -105,8 +104,11 @@ next_claim_time: public(HashMap[uint256, HashMap[address, uint256]]) # Tracks a 
 last_user_claim: public(HashMap[address, HashMap[uint256, uint256]])
 active_period: public(HashMap[uint256, Period])
 bribes: public(HashMap[uint256, Bribe])
-modified_bribe_queue: public(HashMap[uint256, ModifiedBribe])
+
+modified_bribe: public(HashMap[uint256, ModifiedBribe])
 modified_blocked_list: public(HashMap[uint256, DynArray[address, 100]])
+
+
 amount_claimed: public(HashMap[uint256, uint256])
 reward_per_token: public(HashMap[uint256, uint256])
 claim_recipient: public(HashMap[address, address])
@@ -131,13 +133,16 @@ def add_bribe(
     @param reward_token Address of the ERC20 used or rewards.
     @param reward_amount Sum total of reward amount to add.
     @param num_periods_duration length of bribe in terms of periods.
-    @param blocked_list Array of addresses to blacklist.
+    @param blocked_list Array of addresses to the block list.
     @return New bribe_id of the bribe created.
     """
     assert GaugeController(gauge_controller).gauge_types(gauge) >= 0 # Block if gauge not added to controller
     assert reward_token.is_contract
     assert reward_amount != 0
     assert num_periods_duration != 0
+    if len(blocked_list) > 0:
+        # Prevent 0th address from being ZERO_ADDRESS as this is what we'll use later to determine if mutation of list is necessary
+        assert blocked_list[0] != empty(address)
     
     bribe_id: uint256 = self.next_id
     self.next_id += 1 # Increment global counter
@@ -283,11 +288,11 @@ def claimable(user: address, bribe_id: uint256) -> uint256:
 
     if reward_per_token == 0 or (reward_per_token > 0 and self.active_period[bribe_id].ts != current_period):
         reward_per_period: uint256 = 0
-        modified_bribe_queue: ModifiedBribe = self.modified_bribe_queue[bribe_id]
-        if modified_bribe_queue.duration != 0:
-            bribe.duration = modified_bribe_queue.duration
-            bribe.reward_amount = modified_bribe_queue.reward_amount
-            end = modified_bribe_queue.end
+        modified_bribe: ModifiedBribe = self.modified_bribe[bribe_id]
+        if modified_bribe.duration != 0:
+            bribe.duration = modified_bribe.duration
+            bribe.reward_amount = modified_bribe.reward_amount
+            end = modified_bribe.end
         periodsLeft: uint256 = 0
 
         if end > current_period:
@@ -426,23 +431,29 @@ def roll_over(bribe_id: uint256, current_period: uint256):
     """
     index: uint8 = self._active_period_per_bribe(bribe_id)
 
-    modified_bribe: ModifiedBribe = self.modified_bribe_queue[bribe_id]
+    modified_bribe: ModifiedBribe = self.modified_bribe[bribe_id]
 
     # Check if there is an upgrade in queue.
-    if modified_bribe.reward_amount != 0:
+    modification_requested: bool = (
+        modified_bribe.reward_amount != 0 or
+        modified_bribe.blocked_list_modified
+    )
+    if modification_requested:
         self.bribes[bribe_id].duration = modified_bribe.duration
         self.bribes[bribe_id].reward_amount = modified_bribe.reward_amount
         self.bribes[bribe_id].end = modified_bribe.end
 
-    if len(self.modified_blocked_list[bribe_id]) != 0:
-        for blocked_address in self.bribes[bribe_id].blocked_list:
-            self.is_blocked[bribe_id][blocked_address] = False
+        if modified_bribe.blocked_list_modified:
+            for blocked_address in self.bribes[bribe_id].blocked_list:
+                self.is_blocked[bribe_id][blocked_address] = False
 
-        self.bribes[bribe_id].blocked_list = self.modified_blocked_list[bribe_id]
-        self.modified_blocked_list[bribe_id] = empty(DynArray[address, 100])
-        
-        for blocked_address in self.bribes[bribe_id].blocked_list:
-            self.is_blocked[bribe_id][blocked_address] = True
+            self.bribes[bribe_id].blocked_list = self.modified_blocked_list[bribe_id]
+            self.modified_blocked_list[bribe_id] = empty(DynArray[address, 100])
+            
+            for blocked_address in self.bribes[bribe_id].blocked_list:
+                self.is_blocked[bribe_id][blocked_address] = True
+        # Done using the modification, so let's clear it
+        self.modified_bribe[bribe_id] = empty(ModifiedBribe)
 
     bribe: Bribe = self.bribes[bribe_id]
 
@@ -488,13 +499,13 @@ def get_bias(slope: uint256, end: uint256, current_period: uint256) -> uint256:
     return slope * (end - current_period)
 
 @external
-def get_queued_modified_bribe(bribe_id: uint256) -> ModifiedBribe:
+def get_pending_modified_bribe(bribe_id: uint256) -> ModifiedBribe:
     """
-    @notice The modify queue represents pending modifications to an existing bribe to be enacted in the following period
+    @notice Check for pending modifications to an existing bribe to be enacted in the following period
     @dev An empty object is returned if no modified bribe is pending
     @param bribe_id of the bribe to check for modifications
     """
-    return self.modified_bribe_queue[bribe_id]
+    return self.modified_bribe[bribe_id]
 
 @external
 def get_bribe(bribe_id: uint256) -> Bribe:
@@ -513,10 +524,10 @@ def close_bribe(bribe_id: uint256):
 
     if self.current_period() >= bribe.end:
         left_over: uint256 = 0
-        modified_bribe: ModifiedBribe = self.modified_bribe_queue[bribe_id]
+        modified_bribe: ModifiedBribe = self.modified_bribe[bribe_id]
         if modified_bribe.reward_amount != 0:
             left_over = modified_bribe.reward_amount - self.amount_claimed[bribe_id]
-            self.modified_bribe_queue[bribe_id] = empty(ModifiedBribe)
+            self.modified_bribe[bribe_id] = empty(ModifiedBribe)
         else:
             left_over = self.bribes[bribe_id].reward_amount - self.amount_claimed[bribe_id]
         
@@ -565,32 +576,33 @@ def accept_operator():
 
 @external
 @nonreentrant("lock")
-def increase_bribe_duration(bribe_id: uint256, added_periods: uint256, added_amount: uint256):
+def modify_bribe(bribe_id: uint256, added_periods: uint256 = 0, added_amount: uint256 = 0, blocked_list: DynArray[address, 100] = [empty(address)]):
+    """
+    @notice Modify bribe parameters
+    @dev blocked_list is only mutated if default value is not used
+    @param bribe_id ID for the bribe to modify
+    @param added_periods Number of periods to add
+    @param added_amount Amount to add
+    @param blocked_list Default is to copy from active bribe list, not from a pending modification.
+    """
     assert msg.sender == self.bribes[bribe_id].owner #dev: not allowed
     assert self.periods_left(bribe_id) != 0 #dev: bribe ended
     assert added_amount != 0 #dev: amount must increase
+
+    blocked_list_modified: bool = not(len(blocked_list) == 1 and blocked_list[0] == empty(address))
     bribe: Bribe = self.bribes[bribe_id]
-    modified_bribe: ModifiedBribe = self.modified_bribe_queue[bribe_id]
+    modified_bribe: ModifiedBribe = ModifiedBribe({
+        duration: bribe.duration + added_periods,
+        reward_amount: bribe.reward_amount + added_amount,
+        end: bribe.end + (added_periods * WEEK),
+        blocked_list_modified: blocked_list_modified
+    })
+
+    if blocked_list_modified:
+        self.modified_blocked_list[bribe_id] = blocked_list
+    else:
+        self.modified_blocked_list[bribe_id] = empty(DynArray[address, 100])
     
     ERC20(bribe.reward_token).transferFrom(msg.sender, self, added_amount, default_return_value=True)
-    if modified_bribe.reward_amount != 0:
-        modified_bribe = ModifiedBribe({
-            duration: modified_bribe.duration + added_periods,
-            reward_amount: modified_bribe.reward_amount + added_amount,
-            end: modified_bribe.end + (added_periods * WEEK),
-        })
-    else:
-         modified_bribe = ModifiedBribe({
-                duration: bribe.duration + added_periods,
-                reward_amount: bribe.reward_amount + added_amount,
-                end: bribe.end + (added_periods * WEEK),
-        })
-    self.modified_bribe_queue[bribe_id] = modified_bribe
 
-    log BribeDurationUpdated(bribe_id, modified_bribe.duration, modified_bribe.reward_amount)
-
-@external
-def update_blocked_list(bribe_id: uint256, blocked_list: DynArray[address, 100]):
-    assert msg.sender == self.bribes[bribe_id].owner #dev: not allowed
-    modified_bribe: ModifiedBribe = self.modified_bribe_queue[bribe_id]
-    self.modified_blocked_list[bribe_id] = blocked_list
+    log PendingBribeModification(bribe_id, modified_bribe.duration, modified_bribe.reward_amount, blocked_list_modified)
