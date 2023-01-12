@@ -35,19 +35,32 @@ def test_update_owner(gauge1, token1, token1_whale, add_bribe, bribe, user):
     bribe.update_owner(0, user, {"from": token1_whale})
 
 
-def test_increase_bribe_duration(gauge1, token1, token1_whale, add_bribe, bribe, WEEK, user):
+def test_modify_bribe(gauge1, token1, token1_whale, add_bribe, bribe, WEEK, user, accounts):
     amount = 2_000e18
     next_week = (chain.time() // WEEK + 1) * WEEK
-    add_bribe(gauge1, token1, amount, token1_whale)
+    tx = add_bribe(gauge1, token1, amount, token1_whale)
+    assert tx.return_value == bribe.next_id() - 1
     token1.approve(bribe, amount, {"from": token1_whale})
     with brownie.reverts():
-        bribe.increase_bribe_duration(0, 1, amount, {"from": user})
+        bribe.modify_bribe(0, 1, amount, {"from": user})
 
     with brownie.reverts():
-        bribe.increase_bribe_duration(0, 1, 0, {"from": token1_whale})
+        bribe.modify_bribe(0, 1, 0,{"from": token1_whale})
 
-    bribe.increase_bribe_duration(0, 1, amount, {"from": token1_whale})
-    modified_bribe = bribe.modified_bribe_queue(0).dict()
+    bribe.modify_bribe(0, 1, amount, {"from": token1_whale})
+    modified_bribe = bribe.modified_bribe(0).dict()
     assert modified_bribe["duration"] == 2
     assert modified_bribe["reward_amount"] == amount * 2
     assert modified_bribe["end"] == next_week + WEEK * 2
+
+    token1.approve(bribe, 2**256-1, {"from": token1_whale})
+    bribe.modify_bribe(0, 1, amount, [accounts[0], accounts[1]], {"from": token1_whale})
+    assert bribe.modified_bribe(0)["blocked_list_modified"] == True
+    count = 0
+    for i in range(0,100):
+        try:
+            len(bribe.modified_blocked_list(0,i))
+            count += 1
+        except:
+            break
+    assert count == 2

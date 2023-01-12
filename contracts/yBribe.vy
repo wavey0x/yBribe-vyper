@@ -578,7 +578,10 @@ def accept_operator():
 @nonreentrant("lock")
 def modify_bribe(bribe_id: uint256, added_periods: uint256 = 0, added_amount: uint256 = 0, blocked_list: DynArray[address, 100] = [empty(address)]):
     """
-    @notice Modify bribe parameters
+    @notice 
+        Bribe owner can call this function to modify parameters of their bribe. 
+        All modifications are pending, and take effect in the following period.
+    @dev If called while a pending modification exists, the new modifications will overwrite the old.
     @dev blocked_list is only mutated if default value is not used
     @param bribe_id ID for the bribe to modify
     @param added_periods Number of periods to add
@@ -597,6 +600,7 @@ def modify_bribe(bribe_id: uint256, added_periods: uint256 = 0, added_amount: ui
         end: bribe.end + (added_periods * WEEK),
         blocked_list_modified: blocked_list_modified
     })
+    self.modified_bribe[bribe_id] = modified_bribe
 
     if blocked_list_modified:
         self.modified_blocked_list[bribe_id] = blocked_list
