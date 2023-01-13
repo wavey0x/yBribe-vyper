@@ -26,7 +26,7 @@ def test_set_fee_recipient(fee_recipient, bribe, operator, user):
     bribe.set_fee_recipient(operator, {"from": fee_recipient})
 
 
-def set_update_fee(operator, bribe, user):
+def test_set_update_fee(operator, bribe, user):
     with brownie.reverts():
         bribe.update_fee(2 * 10**16, {"from": user})
     with brownie.reverts():
