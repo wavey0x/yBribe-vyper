@@ -594,6 +594,16 @@ def modify_bribe(bribe_id: uint256, added_periods: uint256 = 0, added_amount: ui
 
     blocked_list_modified: bool = not(len(blocked_list) == 1 and blocked_list[0] == empty(address))
     bribe: Bribe = self.bribes[bribe_id]
+
+    if self.modified_bribe[bribe_id].reward_amount != 0:
+        already_sent: uint256 = self.modified_bribe[bribe_id].reward_amount - bribe.reward_amount
+        if already_sent < added_amount:
+            ERC20(bribe.reward_token).transferFrom(msg.sender, self, added_amount - already_sent, default_return_value=True)
+        elif already_sent > added_amount:
+            ERC20(bribe.reward_token).transfer(msg.sender, already_sent - added_amount, default_return_value=True)
+    else:
+        ERC20(bribe.reward_token).transferFrom(msg.sender, self, added_amount, default_return_value=True)
+
     modified_bribe: ModifiedBribe = ModifiedBribe({
         duration: bribe.duration + added_periods,
         reward_amount: bribe.reward_amount + added_amount,
@@ -607,6 +617,5 @@ def modify_bribe(bribe_id: uint256, added_periods: uint256 = 0, added_amount: ui
     else:
         self.modified_blocked_list[bribe_id] = empty(DynArray[address, 100])
     
-    ERC20(bribe.reward_token).transferFrom(msg.sender, self, added_amount, default_return_value=True)
 
     log PendingBribeModification(bribe_id, modified_bribe.duration, modified_bribe.reward_amount, blocked_list_modified)
